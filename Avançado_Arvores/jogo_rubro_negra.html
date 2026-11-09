@@ -1,0 +1,886 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Red-Black Bowling</title>
+<style>
+  /* paleta de cores do jogo inteiro, tudo em variavel CSS pra poder trocar
+     pro tema claro depois sem ter que ficar caçando cor espalhada */
+  :root{
+    --bg: #10151c;
+    --bg-2: #161d27;
+    --lane: #1b232f;
+    --lane-line: #2a3444;
+    --ink: #eef1f5;
+    --ink-dim: #9fb0c3;
+    --amber: #f2b807;
+    --amber-dim: #8a6a12;
+    --red: #e6484f;
+    --red-dark: #a9262b;
+    --black-pin: #232b36;
+    --black-pin-edge: #3a4658;
+    --green: #59c27a;
+    --panel-border: #2a3444;
+    --shadow: rgba(0,0,0,.45);
+  }
+  :root:not([data-theme="light"]) { color-scheme: dark; } /* dark é o padrao se o usuario nao escolher nada */
+  @media (prefers-color-scheme: light){
+    /* aqui a gente segue a preferencia do sistema operacional, mas só
+       se a pessoa não tiver forçado o tema escuro na mão */
+    :root:not([data-theme="dark"]){
+      --bg: #f3f0e8;
+      --bg-2: #ffffff;
+      --lane: #ffffff;
+      --lane-line: #ddd6c6;
+      --ink: #1b1f27;
+      --ink-dim: #5a6270;
+      --panel-border: #ddd6c6;
+      --shadow: rgba(20,20,10,.12);
+    }
+  }
+  /* essa regra repete o tema claro só que forçado por atributo,
+     é meio redundante com o media query de cima mas garante que funciona
+     mesmo se o sistema tiver em dark e a pessoa escolher light manualmente */
+  :root[data-theme="light"]{
+    --bg: #f3f0e8;
+    --bg-2: #ffffff;
+    --lane: #ffffff;
+    --lane-line: #ddd6c6;
+    --ink: #1b1f27;
+    --ink-dim: #5a6270;
+    --panel-border: #ddd6c6;
+    --shadow: rgba(20,20,10,.12);
+  }
+
+  *{box-sizing:border-box;} /* reset básico, sem isso o padding fica bagunçando o calculo de largura */
+  html,body{margin:0;padding:0;}
+  body{
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    min-height:100vh;
+    padding: 18px;
+  }
+  .wrap{
+    max-width: 1180px; /* limita a largura pra não ficar esticado demais em tela grande */
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  /* ---- Cabeçalho estilo "marquise" de boliche, com o placar em cima ---- */
+  .marquee{
+    background: linear-gradient(180deg, var(--bg-2), var(--bg));
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 14px 20px;
+    display:flex;
+    flex-wrap: wrap;
+    align-items:center;
+    justify-content: space-between;
+    gap: 14px;
+    box-shadow: 0 8px 24px var(--shadow);
+  }
+  .title{
+    display:flex; align-items:baseline; gap:10px;
+  }
+  .title h1{
+    font-size: 1.5rem;
+    margin: 0;
+    letter-spacing: .5px;
+    font-weight: 800;
+  }
+  .title h1 span{ color: var(--red); }
+  .title small{ color: var(--ink-dim); font-size: .8rem; }
+
+  /* o placar (pontos, rodada, vidas e recorde) fica lado a lado */
+  .scoreboard{
+    display:flex; gap: 18px; align-items:center; flex-wrap: wrap;
+  }
+  .stat{ text-align:center; min-width: 64px; } /* min-width evita que os numero pulem de lugar quando muda de digito */
+  .stat .num{
+    font-family: "Courier New", monospace;
+    font-size: 1.4rem;
+    font-weight: 700;
+    color: var(--amber);
+    line-height:1;
+  }
+  .stat .lbl{ font-size: .68rem; color: var(--ink-dim); text-transform: uppercase; letter-spacing: .06em; }
+  .lives{ display:flex; gap:4px; font-size:1.1rem; }
+  .life-off{ opacity:.25; filter: grayscale(1); } /* coraçãozinho "apagado" quando perde uma vida */
+
+  /* ---- layout principal: pista da arvore + painel lateral ---- */
+  .grid{
+    display:grid;
+    grid-template-columns: 1fr 320px; /* pista ocupa o resto, painel fica fixo em 320px */
+    gap: 16px;
+  }
+  @media (max-width: 860px){
+    .grid{ grid-template-columns: 1fr; } /* em celular empilha tudo, senão fica espremido de mais */
+  }
+
+  .lane-card{
+    background: var(--lane);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 16px;
+    box-shadow: 0 8px 24px var(--shadow);
+    min-height: 420px;
+    display:flex;
+    flex-direction:column;
+  }
+  .lane-top{
+    display:flex; justify-content:space-between; align-items:center;
+    flex-wrap:wrap; gap: 10px;
+    margin-bottom: 8px;
+  }
+  .ball-queue{ display:flex; gap:8px; align-items:center; } /* fileira de bolinhas mostrando a ordem que vão cair */
+  .ball{
+    width: 34px; height:34px; border-radius:50%;
+    display:flex; align-items:center; justify-content:center;
+    font-weight:700; font-size:.85rem;
+    background: radial-gradient(circle at 35% 30%, #4b5a72, #1a222d 70%);
+    color: var(--ink);
+    border: 2px solid var(--lane-line);
+  }
+  .ball.active{ /* bolinha que é a vez de jogar, fica destacada em amarelo */
+    background: radial-gradient(circle at 35% 30%, #ffdf7a, var(--amber) 70%);
+    color:#1a1400;
+    border-color: var(--amber);
+    box-shadow: 0 0 12px var(--amber);
+  }
+  .ball.spent{ opacity:.3; } /* bola que já foi usada some meio transparente */
+
+  /* a árvore inteira é desenhada num SVG, gerado dinamicamente no JS lá embaixo */
+  svg.tree-svg{ width:100%; height:auto; flex:1; display:block; margin-top: 6px; }
+  .edge{ stroke: var(--lane-line); stroke-width: 3; } /* as linhas que ligam pai e filho */
+  .node-circle{ stroke-width: 3; transition: stroke .2s, r .15s; }
+  .node-circle.red{ fill: var(--red); stroke: var(--red-dark); }
+  .node-circle.black{ fill: var(--black-pin); stroke: var(--black-pin-edge); }
+  .node-text{ fill: #fff; font-weight:700; font-size: 15px; text-anchor:middle; dominant-baseline: central; pointer-events:none; }
+  /* essas 4 classes de destaque (highlight) são usadas quando o jogo quer
+     apontar quem é o nó atual, o pai, o avô e o tio durante o conflito */
+  .hl-current{ stroke: var(--amber) !important; stroke-width:5; filter: drop-shadow(0 0 6px var(--amber)); }
+  .hl-parent{ stroke: #4da3ff !important; stroke-width:5; }
+  .hl-grandparent{ stroke: #b17bff !important; stroke-width:5; }
+  .hl-uncle{ stroke: var(--green) !important; stroke-width:5; }
+  .tag{ /* etiqueta de texto tipo "PAI", "AVÔ" etc que fica flutuando acima do nó */
+    font-size: 10px; font-weight:700; text-anchor:middle;
+  }
+  .tag-current{ fill: var(--amber); }
+  .tag-parent{ fill: #4da3ff; }
+  .tag-grandparent{ fill: #b17bff; }
+  .tag-uncle{ fill: var(--green); }
+
+  .empty-lane{ /* mensagem que aparece quando ainda não tem nenhum pino/nó na pista */
+    flex:1; display:flex; align-items:center; justify-content:center;
+    color: var(--ink-dim); font-size: .95rem; text-align:center; padding: 30px;
+  }
+
+  /* ---- painel lateral com as instruções e botões de ação ---- */
+  .panel{
+    background: var(--bg-2);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 16px;
+    box-shadow: 0 8px 24px var(--shadow);
+    display:flex; flex-direction:column; gap: 12px;
+    min-height: 420px;
+  }
+  .panel h2{ margin:0; font-size: 1rem; }
+  .msg{ /* caixa de texto que vai mudando conforme o jogo explica cada passo */
+    font-size: .9rem; line-height:1.45; color: var(--ink-dim);
+    min-height: 40px; /* altura minima pra o layout não "pular" quando o texto muda de tamanho */
+  }
+  .msg strong{ color: var(--ink); }
+
+  .btn{ /* estilo base de todos os botão do jogo */
+    appearance:none; border:none; cursor:pointer;
+    padding: 12px 14px; border-radius: 8px;
+    font-size: .92rem; font-weight:700;
+    background: var(--lane-line); color: var(--ink);
+    transition: transform .08s, filter .15s;
+  }
+  .btn:hover{ filter: brightness(1.15); } /* só clareia um pouco no hover, nada muito chamativo */
+  .btn:active{ transform: scale(.97); } /* dá aquele feedback de "apertou" */
+  .btn:disabled{ opacity:.4; cursor:default; }
+  .btn-row{ display:flex; gap:10px; flex-wrap:wrap; }
+  .btn-primary{ background: var(--amber); color:#1a1400; } /* botão de lançar bola, o principal */
+  .btn-left{ background:#2c3a52; color:#dce8ff; flex:1; }
+  .btn-right{ background:#2c3a52; color:#dce8ff; flex:1; }
+  .btn-recolor{ background: var(--green); color:#062b12; flex:1; }
+  .btn-rotate{ background: #7a5cff; color:#f4f0ff; flex:1; }
+
+  /* barrinha de tempo que esvazia durante a decisão de recolorir/rotacionar,
+     dá aquela pressão de decidir rápido */
+  .timerbar{ height:6px; border-radius:3px; background: var(--lane-line); overflow:hidden; }
+  .timerbar > div{ height:100%; background: var(--red); width:100%; }
+
+  .rules{ /* lista fixa das 4 regrinhas da árvore rubro-negra, fica no rodapé do painel */
+    border-top: 1px solid var(--panel-border);
+    padding-top: 10px;
+    font-size: .78rem;
+    color: var(--ink-dim);
+    display:flex; flex-direction:column; gap:6px;
+  }
+  .rules b{ color: var(--ink); }
+
+  .combo{ /* caixinha que mostra a altura-preta atual, tipo um "multiplicador" de bônus */
+    display:flex; justify-content:space-between; align-items:center;
+    background: var(--lane);
+    border: 1px dashed var(--panel-border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: .82rem;
+  }
+  .combo b{ color: var(--amber); font-family:"Courier New", monospace; font-size:1rem; }
+
+  /* ---- tela de overlay (vitória ou derrota), cobre a tela toda ---- */
+  .overlay{
+    position: fixed; inset:0; background: rgba(6,8,11,.82);
+    display:flex; align-items:center; justify-content:center;
+    z-index: 50; padding: 20px; /* z-index alto pra garantir que fica por cima de tudo */
+  }
+  .overlay-card{
+    background: var(--bg-2); border:1px solid var(--panel-border);
+    border-radius: 14px; padding: 28px; max-width: 420px; text-align:center;
+    box-shadow: 0 20px 60px rgba(0,0,0,.6);
+  }
+  .overlay-card h2{ margin-top:0; font-size:1.4rem; }
+  .overlay-card p{ color: var(--ink-dim); font-size:.92rem; line-height:1.5; }
+  .hidden{ display:none !important; } /* classe genérica pra esconder qualquer coisa, uso ela em varios lugar */
+
+  footer.note{
+    text-align:center; color: var(--ink-dim); font-size: .74rem; padding: 6px 0 2px;
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <!-- cabeçalho com o titulo e o placar -->
+  <div class="marquee">
+    <div class="title">
+      <h1>🎳 Red-Black <span>Bowling</span></h1>
+      <small>cada bola é um nó — cada acerto exige uma decisão de rebalanceamento</small>
+    </div>
+    <div class="scoreboard">
+      <div class="stat">
+        <div class="num" id="statScore">0</div>
+        <div class="lbl">Pontos</div>
+      </div>
+      <div class="stat">
+        <div class="num" id="statRound">1/5</div>
+        <div class="lbl">Rodada</div>
+      </div>
+      <div class="stat">
+        <div class="lives" id="statLives">❤️❤️❤️</div>
+        <div class="lbl">Vidas</div>
+      </div>
+      <div class="stat">
+        <div class="num" id="statRecord">0</div>
+        <div class="lbl">Recorde</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <!-- essa é a "pista" onde a árvore vai sendo desenhada, o svg fica vazio
+         no HTML e é preenchido todo via JS na função renderTree -->
+    <div class="lane-card">
+      <div class="lane-top">
+        <div class="ball-queue" id="ballQueue"></div>
+        <button class="btn btn-primary" id="btnLancar">🎳 Lançar bola</button>
+      </div>
+      <svg class="tree-svg" id="treeSvg" viewBox="0 0 600 360" preserveAspectRatio="xMidYMin meet"></svg>
+      <div class="empty-lane" id="emptyLane">A pista está vazia. Lance a primeira bola para começar a construir a Árvore Rubro-Negra de pinos!</div>
+    </div>
+
+    <!-- painel de instrução, aqui que o jogador ve as mensagens e os botão de decisão -->
+    <div class="panel">
+      <h2 id="panelTitle">Status</h2>
+      <div class="msg" id="panelMsg">Toque em <strong>Lançar bola</strong> para inserir o primeiro pino. Cada bola entra sempre como um pino <strong style="color:var(--red)">vermelho</strong>.</div>
+
+      <!-- os botões (esquerda/direita ou recolorir/rotacionar) são injetados aqui pelo JS -->
+      <div id="controlArea"></div>
+
+      <div class="combo">
+        <span>Altura-preta atual → multiplicador de Strike</span>
+        <b id="comboVal">h=1 → ×1</b>
+      </div>
+
+      <!-- lembrete fixo das regras, não muda nunca -->
+      <div class="rules">
+        <div><b>1. Cores:</b> todo nó é vermelho ou preto.</div>
+        <div><b>2. Sem vermelho-vermelho:</b> um pino vermelho nunca pode ter filho vermelho.</div>
+        <div><b>3. Altura-preta:</b> todo caminho da raiz até uma folha tem o mesmo nº de pinos pretos.</div>
+        <div><b>4. Correção:</b> tio vermelho → <span style="color:var(--green)">recolorir</span>; tio preto/nulo → <span style="color:#a68bff">rotacionar</span>.</div>
+      </div>
+    </div>
+  </div>
+  <footer class="note">Baseado no jogo de "Red-Black Bowling" — decisão algorítmica de Recolorir vs. Rotação em cada conflito.</footer>
+</div>
+
+<!-- overlay de fim de jogo, começa escondido (classe hidden) e só aparece
+     quando ganha ou quando acaba as vidas -->
+<div class="overlay hidden" id="overlay">
+  <div class="overlay-card">
+    <h2 id="overlayTitle">Fim de jogo</h2>
+    <p id="overlayText"></p>
+    <button class="btn btn-primary" id="btnRestart">Jogar novamente</button>
+  </div>
+</div>
+
+<script>
+(function(){
+  // tudo dentro de uma IIFE pra não vazar variável nenhuma pro escopo global,
+  // já que esse arquivo é auto-contido e pode ser colado em qualquer lugar
+
+  // ---------------- Modelo da árvore (a parte "de verdade" do algoritmo) ----------------
+  function Node(value){
+    this.value = value;
+    this.color = 'red'; // toda inserção em árvore rubro-negra começa vermelha, é regra
+    this.left = null;
+    this.right = null;
+    this.parent = null; // guardo o pai pra facilitar as rotações, sem isso ia ter que passar ele toda hora
+  }
+
+  // rotação clássica de árvore, essa parte é padrão de livro-texto (tipo CLRS),
+  // não tem segredo nenhum de jogo aqui
+  function rotateLeft(tree, x){
+    const y = x.right;
+    x.right = y.left;
+    if (y.left) y.left.parent = x;
+    y.parent = x.parent;
+    if (!x.parent) tree.root = y; // se x era a raiz, agora y vira a raiz nova
+    else if (x === x.parent.left) x.parent.left = y;
+    else x.parent.right = y;
+    y.left = x;
+    x.parent = y;
+  }
+  function rotateRight(tree, x){ // espelho exato da rotateLeft
+    const y = x.left;
+    x.left = y.right;
+    if (y.right) y.right.parent = x;
+    y.parent = x.parent;
+    if (!x.parent) tree.root = y;
+    else if (x === x.parent.right) x.parent.right = y;
+    else x.parent.left = y;
+    y.right = x;
+    x.parent = y;
+  }
+
+  // altura-preta: desce sempre pela esquerda contando quantos nó preto tem,
+  // dá no mesmo pra qualquer caminho porque a propriedade 3 garante isso
+  function blackHeight(root){
+    let n = root, count = 0;
+    while (n){ if (n.color === 'black') count++; n = n.left; }
+    return count + 1; // conta a folha nula (NIL) como se fosse preta também
+  }
+
+  // Essa é a peça central de tudo: um generator que vai "pausando" a inserção
+  // normal de BST + o fixup da rubro-negra pra cada pausa virar uma pergunta
+  // pro jogador (pra qual lado desce? recolorir ou rotacionar?). Sem generator
+  // ia ser bem mais chato de sincronizar isso com a UI passo a passo.
+  function* insertWithSteps(tree, value){
+    let parent = null;
+    let cur = tree.root;
+    // primeiro desce como numa BST comum, indo perguntando "esquerda ou direita"
+    // a cada nó que passa
+    while (cur){
+      parent = cur;
+      const correctDir = value < cur.value ? 'left' : 'right';
+      yield { type:'navigate', node: cur, value, correctDir };
+      cur = correctDir === 'left' ? cur.left : cur.right;
+    }
+    // achou o buraco, cria o nó novo (sempre vermelho, olha o construtor Node)
+    const z = new Node(value);
+    z.parent = parent;
+    if (!parent) tree.root = z;
+    else if (value < parent.value) parent.left = z;
+    else parent.right = z;
+
+    yield { type:'inserted', node: z };
+
+    // fixup: enquanto o pai for vermelho a gente tem uma violação (regra 2),
+    // então precisa recolorir ou rotacionar, subindo a árvore até resolver
+    let n = z;
+    while (n.parent && n.parent.color === 'red'){
+      const parentN = n.parent;
+      const gp = parentN.parent; // sempre existe pq a raiz é sempre preta, então o pai vermelho nunca é raiz
+      if (parentN === gp.left){
+        const uncle = gp.right;
+        if (uncle && uncle.color === 'red'){
+          // caso 1: tio vermelho -> só recolorir e sobe o problema pro avô
+          yield { type:'decision', node:n, parent:parentN, grandparent:gp, uncle, correctAction:'recolor' };
+          parentN.color = 'black';
+          uncle.color = 'black';
+          gp.color = 'red';
+          n = gp;
+        } else {
+          // caso 2/3: tio preto (ou nulo) -> precisa de rotação pra arrumar
+          yield { type:'decision', node:n, parent:parentN, grandparent:gp, uncle, correctAction:'rotate' };
+          let z2 = n;
+          if (z2 === parentN.right){
+            // caso "zig-zag": primeiro alinha com uma rotação a esquerda
+            z2 = parentN;
+            rotateLeft(tree, z2);
+          }
+          z2.parent.color = 'black';
+          gp.color = 'red';
+          rotateRight(tree, gp);
+          n = z2;
+        }
+      } else {
+        // espelho do bloco de cima, só trocando esquerda por direita
+        const uncle = gp.left;
+        if (uncle && uncle.color === 'red'){
+          yield { type:'decision', node:n, parent:parentN, grandparent:gp, uncle, correctAction:'recolor' };
+          parentN.color = 'black';
+          uncle.color = 'black';
+          gp.color = 'red';
+          n = gp;
+        } else {
+          yield { type:'decision', node:n, parent:parentN, grandparent:gp, uncle, correctAction:'rotate' };
+          let z2 = n;
+          if (z2 === parentN.left){
+            z2 = parentN;
+            rotateRight(tree, z2);
+          }
+          z2.parent.color = 'black';
+          gp.color = 'red';
+          rotateLeft(tree, gp);
+          n = z2;
+        }
+      }
+    }
+    tree.root.color = 'black'; // a raiz tem que ser sempre preta, garante no final
+    yield { type:'done' };
+  }
+
+  // ---------------- Estado do jogo ----------------
+  // guardei tudo em variável solta mesmo (sem objeto único de "state"), como
+  // o jogo é pequeno não acho que compensa complicar com um store
+  let tree = { root: null };
+  let balls = [];
+  let ballIndex = 0;
+  let lives = 3;
+  let score = 0;
+  let gen = null; // generator ativo da bola atual (insertWithSteps)
+  let mistakesThisBall = 0; // reseta a cada bola, usado pra saber se foi "bola perfeita"
+  let timerHandle = null; // id do setInterval da barra de tempo, pra poder cancelar
+  let busy = false; // trava os cliques enquanto uma animação/timeout tá rolando
+  let highScore = 0;
+
+  // tenta recuperar o recorde salvo, envolvido em try/catch porque em alguns
+  // navegador (modo anônimo, por exemplo) o localStorage pode dar erro
+  try {
+    const saved = localStorage.getItem('rbb_highscore');
+    if (saved) highScore = parseInt(saved, 10) || 0;
+  } catch(e){}
+
+  // cache de todos os elementos do DOM que a gente vai mexer, assim não
+  // fica chamando getElementById toda hora dentro das função
+  const el = {
+    score: document.getElementById('statScore'),
+    round: document.getElementById('statRound'),
+    lives: document.getElementById('statLives'),
+    record: document.getElementById('statRecord'),
+    ballQueue: document.getElementById('ballQueue'),
+    btnLancar: document.getElementById('btnLancar'),
+    svg: document.getElementById('treeSvg'),
+    emptyLane: document.getElementById('emptyLane'),
+    panelTitle: document.getElementById('panelTitle'),
+    panelMsg: document.getElementById('panelMsg'),
+    controlArea: document.getElementById('controlArea'),
+    comboVal: document.getElementById('comboVal'),
+    overlay: document.getElementById('overlay'),
+    overlayTitle: document.getElementById('overlayTitle'),
+    overlayText: document.getElementById('overlayText'),
+    btnRestart: document.getElementById('btnRestart'),
+  };
+
+  // sorteia 5 valores diferentes entre 1 e 89 (uso Set pra garantir que não repete,
+  // senão dava pra cair duas bola com o mesmo número e ia confundir o jogador)
+  function generateBalls(){
+    const set = new Set();
+    while (set.size < 5) set.add(1 + Math.floor(Math.random() * 89));
+    return Array.from(set);
+  }
+
+  // atualiza tudo que é "número na tela": pontos, rodada, vidas, recorde,
+  // a fileira de bolinha e o multiplicador de altura-preta
+  function updateScoreboard(){
+    el.score.textContent = score;
+    el.round.textContent = Math.min(ballIndex + 1, 5) + '/5';
+    el.record.textContent = highScore;
+    let hearts = '';
+    for (let i = 0; i < 3; i++) hearts += `<span class="${i < lives ? '' : 'life-off'}">❤️</span>`;
+    el.lives.innerHTML = hearts;
+
+    el.ballQueue.innerHTML = '';
+    balls.forEach((b, i) => {
+      const d = document.createElement('div');
+      d.className = 'ball' + (i === ballIndex ? ' active' : '') + (i < ballIndex ? ' spent' : '');
+      d.textContent = b;
+      el.ballQueue.appendChild(d);
+    });
+
+    const bh = tree.root ? blackHeight(tree.root) : 1;
+    el.comboVal.textContent = `h=${bh} → ×${bh}`;
+  }
+
+  // ---------------- Desenho da árvore (SVG) ----------------
+  // percorre em ordem (in-order) pra descobrir a posição x de cada nó — como
+  // in-order visita em ordem crescente de valor, isso já deixa a árvore
+  // desenhada bonitinha da esquerda pra direita sem precisar calcular mais nada
+  function computeLayout(root){
+    const positions = new Map();
+    let x = 0;
+    let maxDepth = 0;
+    (function inorder(node, depth){
+      if (!node) return;
+      inorder(node.left, depth + 1);
+      positions.set(node, { xi: x++, depth }); // xi = posição horizontal (index), depth = nivel/profundidade
+      maxDepth = Math.max(maxDepth, depth);
+      inorder(node.right, depth + 1);
+    })(root, 0);
+    return { positions, count: x, maxDepth };
+  }
+
+  // redesenha o svg do zero toda vez (não tenta fazer diff nem nada elegante,
+  // como a árvore é pequena isso é rápido o suficiente e fica mais simples)
+  function renderTree(highlight){
+    highlight = highlight || {};
+    const svg = el.svg;
+    svg.innerHTML = '';
+
+    if (!tree.root){
+      el.emptyLane.classList.remove('hidden');
+      svg.classList.add('hidden');
+      return;
+    }
+    el.emptyLane.classList.add('hidden');
+    svg.classList.remove('hidden');
+
+    const { positions, count, maxDepth } = computeLayout(tree.root);
+    const spacingX = 66, spacingY = 84, marginX = 40, marginY = 34;
+    // largura/altura do viewBox calculada dinamicamente conforme quantos nó
+    // tem e qual a profundidade máxima, assim a árvore nunca fica cortada
+    const width = Math.max(320, marginX * 2 + (count - 1) * spacingX);
+    const height = marginY * 2 + maxDepth * spacingY + 30;
+    svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+
+    // função auxiliar pra converter a posição "logica" (xi, depth) em pixel de verdade
+    function px(node){
+      const p = positions.get(node);
+      return { x: marginX + p.xi * spacingX, y: marginY + p.depth * spacingY };
+    }
+
+    const ns = 'http://www.w3.org/2000/svg';
+    // desenha as linha (edges) primeiro, pra elas ficarem atrás dos círculos dos nó
+    positions.forEach((_, node) => {
+      if (node.parent){
+        const a = px(node), b = px(node.parent);
+        const line = document.createElementNS(ns, 'line');
+        line.setAttribute('x1', b.x); line.setAttribute('y1', b.y);
+        line.setAttribute('x2', a.x); line.setAttribute('y2', a.y);
+        line.setAttribute('class', 'edge');
+        svg.appendChild(line);
+      }
+    });
+    // agora desenha cada nó (o "pino") como um circulo + texto dentro de um <g>
+    positions.forEach((_, node) => {
+      const p = px(node);
+      const g = document.createElementNS(ns, 'g');
+
+      const circle = document.createElementNS(ns, 'circle');
+      circle.setAttribute('cx', p.x);
+      circle.setAttribute('cy', p.y);
+      circle.setAttribute('r', 22);
+      let cls = 'node-circle ' + node.color; // classe base + vermelho ou preto
+      if (highlight.current === node) cls += ' hl-current';
+      else if (highlight.parent === node) cls += ' hl-parent';
+      else if (highlight.grandparent === node) cls += ' hl-grandparent';
+      else if (highlight.uncle === node) cls += ' hl-uncle';
+      circle.setAttribute('class', cls);
+      g.appendChild(circle);
+
+      const text = document.createElementNS(ns, 'text');
+      text.setAttribute('x', p.x);
+      text.setAttribute('y', p.y);
+      text.setAttribute('class', 'node-text');
+      text.textContent = node.value;
+      g.appendChild(text);
+
+      // etiqueta em texto (BOLA/PAI/AVÔ/TIO) só aparece se esse nó fizer
+      // parte do highlight que foi passado pra função
+      let tagText = null, tagClass = '';
+      if (highlight.current === node){ tagText = 'BOLA'; tagClass = 'tag-current'; }
+      else if (highlight.parent === node){ tagText = 'PAI'; tagClass = 'tag-parent'; }
+      else if (highlight.grandparent === node){ tagText = 'AVÔ'; tagClass = 'tag-grandparent'; }
+      else if (highlight.uncle === node){ tagText = 'TIO'; tagClass = 'tag-uncle'; }
+      if (tagText){
+        const tag = document.createElementNS(ns, 'text');
+        tag.setAttribute('x', p.x);
+        tag.setAttribute('y', p.y - 32);
+        tag.setAttribute('class', 'tag ' + tagClass);
+        tag.setAttribute('text-anchor', 'middle');
+        tag.textContent = tagText;
+        g.appendChild(tag);
+      }
+
+      svg.appendChild(g);
+    });
+  }
+
+  // ---------------- Controle do fluxo do jogo ----------------
+  // limpa os botões da rodada anterior e cancela o timer da barrinha se tiver rolando,
+  // chamo isso antes de mostrar uma UI nova pra não ficar botão velho na tela
+  function clearControls(){
+    el.controlArea.innerHTML = '';
+    if (timerHandle) { clearInterval(timerHandle); timerHandle = null; }
+  }
+
+  // atualiza o titulo e a mensagem do painel lateral (aceita HTML pq usa <strong> etc)
+  function setMsg(title, html){
+    el.panelTitle.textContent = title;
+    el.panelMsg.innerHTML = html;
+  }
+
+  // tira uma vida do jogador e mostra o motivo do erro; retorna true se
+  // isso zerou as vidas (pra quem chamou saber que precisa parar por ali)
+  function loseLife(reason){
+    lives--;
+    mistakesThisBall++;
+    updateScoreboard();
+    setMsg('❌ Vida perdida!', reason + (lives > 0 ? ' <strong>Vidas restantes: ' + lives + '</strong>' : ''));
+    if (lives <= 0){
+      setTimeout(triggerGameOver, 500);
+      return true;
+    }
+    return false;
+  }
+
+  // essa função recebe o resultado de gen.next() e decide o que mostrar na tela
+  // de acordo com o "type" do passo que o generator (insertWithSteps) mandou
+  function processStep(result){
+    if (result.done){ return; } // generator acabou, não tem mais nada a fazer
+
+    const step = result.value;
+
+    if (step.type === 'navigate'){
+      renderTree({ current: step.node });
+      showNavigateUI(step);
+    } else if (step.type === 'inserted'){
+      // nó novo foi criado, só mostra a mensagem e depois de um tempinho
+      // já continua sozinho pro próximo passo (não precisa clicar em nada aqui)
+      renderTree({ current: step.node });
+      setMsg('🎳 Pino inserido!', `A bola virou um pino <strong style="color:var(--red)">vermelho</strong> no valor <strong>${step.node.value}</strong>. Toda inserção na Rubro-Negra entra vermelha — verificando se há conflito com o pai...`);
+      busy = true;
+      setTimeout(() => processStep(gen.next()), 900);
+    } else if (step.type === 'decision'){
+      // achou uma violação vermelho-vermelho, aqui sim precisa que o jogador escolha
+      renderTree({ current: step.node, parent: step.parent, grandparent: step.grandparent, uncle: step.uncle });
+      showDecisionUI(step);
+    } else if (step.type === 'done'){
+      // fixup terminou, a bola virou pino definitivo e balanceado
+      renderTree();
+      busy = true;
+      setTimeout(onBallComplete, 700);
+    }
+  }
+
+  // monta os 2 botões de esquerda/direita quando o jogo pergunta pra qual
+  // lado a bola deve descer (comparação de BST normal)
+  function showNavigateUI(step){
+    busy = false; // libera clique, aqui é o jogador que decide quando continuar
+    setMsg('🎯 Escolha o ramo', `A bola vale <strong>${step.value}</strong>. Comparando com o pino <strong>${step.node.value}</strong>: para qual lado ela deve ir numa Árvore de Busca Binária?`);
+    clearControls();
+    const row = document.createElement('div');
+    row.className = 'btn-row';
+    const bLeft = document.createElement('button');
+    bLeft.className = 'btn btn-left';
+    bLeft.textContent = `⬅️ Esquerda (< ${step.node.value})`;
+    const bRight = document.createElement('button');
+    bRight.className = 'btn btn-right';
+    bRight.textContent = `➡️ Direita (> ${step.node.value})`;
+    bLeft.onclick = () => chooseDirection('left', step);
+    bRight.onclick = () => chooseDirection('right', step);
+    row.appendChild(bLeft); row.appendChild(bRight);
+    el.controlArea.appendChild(row);
+  }
+
+  // callback dos botão esquerda/direita — confere se o jogador acertou a
+  // comparação e só então manda o generator seguir em frente
+  function chooseDirection(dir, step){
+    if (busy) return; // proteção contra clique duplo enquanto já ta processando
+    busy = true;
+    clearControls();
+    if (dir !== step.correctDir){
+      const ended = loseLife(`Ramo errado! ${step.value} ${step.value < step.node.value ? 'é menor' : 'é maior'} que ${step.node.value}, então deveria ir para ${step.correctDir === 'left' ? 'esquerda' : 'direita'}.`);
+      if (ended) return; // se acabou as vidas, para tudo aqui, não deixa continuar o generator
+    } else {
+      setMsg('✅ Ramo correto!', `Beleza, ${step.value} realmente vai para o lado ${dir === 'left' ? 'esquerdo' : 'direito'}.`);
+    }
+    setTimeout(() => processStep(gen.next()), 700);
+  }
+
+  // monta a UI de "conflito vermelho-vermelho": explica a situação, mostra
+  // a cor do tio e cria os 2 botões de ação + a barra de tempo que corre sozinha
+  function showDecisionUI(step){
+    busy = false;
+    const uncleDesc = step.uncle ? (step.uncle.color === 'red' ? 'vermelho' : 'preto') : 'nulo (preto)';
+    setMsg('🚨 Conflito vermelho-vermelho!', `O pino <strong>${step.node.value}</strong> e seu pai <strong>${step.parent.value}</strong> são os dois vermelhos — isso viola a Propriedade 2! Olhe a cor do <strong>Tio</strong> (destacado em verde): ele está <strong>${uncleDesc}</strong>. O que fazer?`);
+    clearControls();
+
+    const bar = document.createElement('div');
+    bar.className = 'timerbar';
+    const fill = document.createElement('div');
+    bar.appendChild(fill);
+    el.controlArea.appendChild(bar);
+
+    const row = document.createElement('div');
+    row.className = 'btn-row';
+    row.style.marginTop = '10px';
+    const bRecolor = document.createElement('button');
+    bRecolor.className = 'btn btn-recolor';
+    bRecolor.textContent = '🎨 Recolorir';
+    const bRotate = document.createElement('button');
+    bRotate.className = 'btn btn-rotate';
+    bRotate.textContent = '🔄 Fazer Rotação';
+    bRecolor.onclick = () => chooseAction('recolor', step);
+    bRotate.onclick = () => chooseAction('rotate', step);
+    row.appendChild(bRecolor); row.appendChild(bRotate);
+    el.controlArea.appendChild(row);
+
+    // barrinha regressiva: 5 segundos pra decidir, atualiza de 100 em 100ms.
+    // se estourar o tempo, conta como resposta errada ('timeout')
+    let elapsed = 0;
+    const totalMs = 5000, stepMs = 100;
+    timerHandle = setInterval(() => {
+      elapsed += stepMs;
+      const pct = Math.max(0, 100 - (elapsed / totalMs) * 100);
+      fill.style.width = pct + '%';
+      if (elapsed >= totalMs){
+        clearInterval(timerHandle); timerHandle = null;
+        chooseAction('timeout', step);
+      }
+    }, stepMs);
+  }
+
+  // callback dos botão recolorir/rotacionar (ou do timeout estourando).
+  // dá pontos se acertar, tira vida se errar, e sempre segue o generator depois
+  function chooseAction(action, step){
+    if (busy) return;
+    busy = true;
+    clearControls();
+    const uncleDesc = step.uncle ? (step.uncle.color === 'red' ? 'vermelho' : 'preto') : 'nulo (preto)';
+    if (action !== step.correctAction){
+      const correctLabel = step.correctAction === 'recolor' ? 'Recolorir (tio vermelho)' : 'Fazer Rotação (tio preto/nulo)';
+      const ended = loseLife(`Ação errada! Como o tio é ${uncleDesc}, a ação correta era: <strong>${correctLabel}</strong>.`);
+      if (ended) return;
+    } else {
+      const bonus = step.correctAction === 'recolor' ? 15 : 25;
+      score += bonus;
+      setMsg('✅ Ação correta!', `${step.correctAction === 'recolor' ? 'Recolorir' : 'Rotacionar'} era mesmo o certo, já que o tio é ${uncleDesc}. +${bonus} pontos.`);
+      updateScoreboard();
+    }
+    setTimeout(() => processStep(gen.next()), 900);
+  }
+
+  // chamado quando o generator termina (type 'done'): calcula a pontuação
+  // da bola, mostra o resultado e decide se acabou o jogo (vitória) ou se
+  // libera o botão pra lançar a próxima
+  function onBallComplete(){
+    const bh = blackHeight(tree.root);
+    const base = mistakesThisBall === 0 ? 100 : 40; // bola sem erro vale bem mais
+    const gained = base * bh; // a altura-preta funciona tipo um multiplicador de strike
+    score += gained;
+    updateScoreboard();
+    setMsg('🎉 Pino equilibrado!', `A árvore ficou balanceada novamente. Altura-preta = ${bh} → +${gained} pontos${mistakesThisBall === 0 ? ' (bola perfeita, sem erros!)' : ''}.`);
+
+    ballIndex++;
+    busy = false;
+    if (ballIndex >= balls.length){
+      setTimeout(triggerVictory, 900); // acabaram as 5 bola, jogador venceu
+    } else {
+      updateScoreboard();
+      el.btnLancar.disabled = false;
+      el.btnLancar.textContent = '🎳 Lançar próxima bola';
+    }
+  }
+
+  // dispara uma bola nova: cria um generator novo pra ela e já processa o
+  // primeiro passo (geralmente um 'navigate' ou direto 'inserted' se a árvore tava vazia)
+  function startBall(){
+    if (busy) return;
+    if (ballIndex >= balls.length) return;
+    el.btnLancar.disabled = true;
+    mistakesThisBall = 0;
+    const value = balls[ballIndex];
+    gen = insertWithSteps(tree, value);
+    setMsg('🎳 Bola lançada!', `Valor <strong>${value}</strong> em jogo.`);
+    processStep(gen.next());
+  }
+
+  // fim de jogo por derrota (zerou as vidas) — bem parecido com a vitória,
+  // só muda o texto e o titulo do overlay
+  function triggerGameOver(){
+    clearControls();
+    el.btnLancar.disabled = true;
+    if (score > highScore){
+      highScore = score;
+      try { localStorage.setItem('rbb_highscore', String(highScore)); } catch(e){}
+    }
+    updateScoreboard();
+    el.overlayTitle.textContent = '💥 A pista desmoronou!';
+    el.overlayText.textContent = `As violações da Rubro-Negra não foram corrigidas a tempo e a árvore degenerou. Pontuação final: ${score}.`;
+    el.overlay.classList.remove('hidden');
+  }
+
+  // fim de jogo por vitória (completou as 5 bola sem zerar a vida)
+  function triggerVictory(){
+    clearControls();
+    el.btnLancar.disabled = true;
+    if (score > highScore){
+      highScore = score;
+      try { localStorage.setItem('rbb_highscore', String(highScore)); } catch(e){}
+    }
+    updateScoreboard();
+    el.overlayTitle.textContent = '🏆 Strike perfeito!';
+    el.overlayText.textContent = `Você posicionou e balanceou as 5 bolas mantendo todas as propriedades da Árvore Rubro-Negra! Pontuação final: ${score}.`;
+    el.overlay.classList.remove('hidden');
+  }
+
+  // zera tudo e prepara um jogo novo do zero — chamada tanto no carregamento
+  // inicial da página quanto quando clica em "Jogar novamente"
+  function resetGame(){
+    tree = { root: null };
+    balls = generateBalls();
+    ballIndex = 0;
+    lives = 3;
+    score = 0;
+    mistakesThisBall = 0;
+    busy = false;
+    el.overlay.classList.add('hidden');
+    el.btnLancar.disabled = false;
+    el.btnLancar.textContent = '🎳 Lançar bola';
+    setMsg('Status', 'Toque em <strong>Lançar bola</strong> para inserir o primeiro pino. Cada bola entra sempre como um pino <strong style="color:var(--red)">vermelho</strong>.');
+    clearControls();
+    renderTree();
+    updateScoreboard();
+  }
+
+  // amarra os eventos de clique nos dois botão principal
+  el.btnLancar.addEventListener('click', startBall);
+  el.btnRestart.addEventListener('click', resetGame);
+
+  // já inicia o jogo assim que o script carrega
+  resetGame();
+})();
+</script>
+</body>
+</html>
